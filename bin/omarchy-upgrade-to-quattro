@@ -1798,27 +1798,73 @@ browser_is_running() {
 }
 
 repair_chromium_copy_url_shortcuts() {
-  local profile_root preferences
+  local profile_root preferences stale_id stale_ids_output
   local -a profile_roots=(
     "$HOME/.config/chromium"
     "$HOME/.config/google-chrome"
     "$HOME/.config/google-chrome-beta"
+    "$HOME/.config/google-chrome-unstable"
     "$HOME/.config/BraveSoftware/Brave-Browser"
     "$HOME/.config/BraveSoftware/Brave-Browser-Beta"
+    "$HOME/.config/BraveSoftware/Brave-Browser-Nightly"
     "$HOME/.config/microsoft-edge"
     "$HOME/.config/microsoft-edge-beta"
+    "$HOME/.config/microsoft-edge-dev"
     "$HOME/.config/vivaldi"
     "$HOME/.config/opera"
     "$HOME/.config/helium"
   )
-  local -a pending=()
+  local -a stale_ids stale_id_greps=() pending=()
+
+  # Chromium derives an unpacked extension's id from its absolute load path
+  # when the manifest carries no key, so the pre-package id differs per user.
+  # The extension also loaded keyless from /usr/share for a stretch before its
+  # id was pinned, which produced one stale id shared by every install.
+  stale_ids_output=$(python3 - <<'CHROMIUM_STALE_IDS_PY'
+import hashlib
+import os
+
+def extension_id(path_bytes):
+    digest = hashlib.sha256(path_bytes).digest()[:16]
+    return "".join(chr(97 + (b >> 4)) + chr(97 + (b & 15)) for b in digest)
+
+# Chromium canonicalizes --load-extension paths with realpath() before
+# hashing, so symlinked path components registered the id of the resolved
+# path. Resolve up to the parent of the omarchy directory but no further:
+# ~/.local/share/omarchy may already be a compatibility symlink to
+# /usr/share/omarchy, so resolving the full path could never reproduce the id
+# Chromium derived when the files really lived there.
+home = os.path.expanduser("~")
+suffix = "/.local/share/omarchy/default/chromium/extensions/copy-url"
+share_path = "/usr/share/omarchy/default/chromium/extensions/copy-url"
+
+seen = []
+for candidate in (
+    home + suffix,
+    os.path.realpath(home) + suffix,
+    os.path.realpath(home + "/.local/share") + "/omarchy/default/chromium/extensions/copy-url",
+    share_path,
+    os.path.realpath(share_path),
+):
+    stale_id = extension_id(os.fsencode(candidate))
+    if stale_id not in seen:
+        seen.append(stale_id)
+
+print("\n".join(seen))
+CHROMIUM_STALE_IDS_PY
+  ) || return 0
+  readarray -t stale_ids <<<"$stale_ids_output"
+
+  for stale_id in "${stale_ids[@]}"; do
+    stale_id_greps+=(-e "$stale_id")
+  done
 
   for profile_root in "${profile_roots[@]}"; do
     [[ -d $profile_root ]] || continue
 
     for preferences in "$profile_root"/*/Preferences; do
       [[ -f $preferences ]] || continue
-      grep -qF 'bocglpkldciamkbmlphanhkfnhpmnbma' "$preferences" || continue
+      grep -qF "${stale_id_greps[@]}" "$preferences" || continue
       pending+=("$preferences")
     done
   done
@@ -1826,16 +1872,23 @@ repair_chromium_copy_url_shortcuts() {
   (( ${#pending[@]} )) || return 0
 
   # A running browser holds Preferences in memory and rewrites it on exit,
-  # which would revert this repair. Ask the user to close it first.
+  # which would revert this repair — and a reverted repair looks done, so the
+  # follow-up migration would mark itself complete off the transient disk
+  # state. Ask the user to close browsers, then verify: if one still runs,
+  # write nothing and leave the repair to the migration, which stays pending
+  # until browsers are closed.
   if browser_is_running && (( ! OMARCHY_UPGRADE_YES )) && [[ -r /dev/tty ]]; then
-    if ! gum confirm "Close all browser windows before the Copy URL shortcut is repaired, then continue" </dev/tty; then
-      echo "Skipped Copy URL shortcut repair; re-run after closing your browser." >&2
-      return 0
-    fi
+    gum confirm "Close all browser windows before the Copy URL shortcut is repaired, then continue" </dev/tty || true
+  fi
+
+  if browser_is_running; then
+    echo "Skipped Copy URL shortcut repair while a browser is running; a migration repairs it once browsers close." >&2
+    return 0
   fi
 
   for preferences in "${pending[@]}"; do
-    python3 - "$preferences" "$preferences.omarchy-upgrade-to-quattro.$BACKUP_SUFFIX.bak" <<'CHROMIUM_SHORTCUTS_PATCH_PY'
+    python3 - "$preferences" "$preferences.omarchy-upgrade-to-quattro.$BACKUP_SUFFIX.bak" \
+      bgpiichlckmfanooecilcjemknkcpngb "${stale_ids[@]}" <<'CHROMIUM_SHORTCUTS_PATCH_PY'
 import json
 import shutil
 import sys
@@ -1843,25 +1896,30 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 backup_path = Path(sys.argv[2])
-old_id = "bocglpkldciamkbmlphanhkfnhpmnbma"
-new_id = "bgpiichlckmfanooecilcjemknkcpngb"
+new_id = sys.argv[3]
+old_ids = set(sys.argv[4:])
 preferences = json.loads(path.read_text())
 extensions = preferences.get("extensions", {})
 commands = extensions.get("commands", {})
+settings = extensions.get("settings", {})
 changed = False
 
 for command in commands.values():
-    if command.get("extension") == old_id and command.get("command_name") == "copy-url":
+    if command.get("extension") in old_ids and command.get("command_name") == "copy-url":
         command["extension"] = new_id
+        new_command = settings.get(new_id, {}).get("commands", {}).get("copy-url", {})
+        if new_command:
+            new_command["was_assigned"] = True
+        changed = True
+
+# Drop the ghost extension's leftover settings so no stale trace remains: the
+# follow-up migration treats any stale id on disk as work it must redo once
+# browsers are closed, and residue would make it spin on repaired profiles.
+for old_id in old_ids:
+    if settings.pop(old_id, None) is not None:
         changed = True
 
 if changed:
-    settings = extensions.get("settings", {})
-    old_command = settings.get(old_id, {}).get("commands", {}).get("copy-url", {})
-    new_command = settings.get(new_id, {}).get("commands", {}).get("copy-url", {})
-    old_command.pop("was_assigned", None)
-    if new_command:
-        new_command["was_assigned"] = True
     shutil.copy2(path, backup_path)
     path.write_text(json.dumps(preferences, separators=(",", ":")))
 CHROMIUM_SHORTCUTS_PATCH_PY

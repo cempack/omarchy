@@ -119,12 +119,13 @@ cat >"$preferences" <<'JSON'
 {"extensions":{"commands":{"linux:Alt+Shift+L":{"command_name":"copy-url","extension":"bocglpkldciamkbmlphanhkfnhpmnbma","global":false},"linux:Alt+Shift+D":{"command_name":"download-video","extension":"dedjgknigfeelejglamclffonmophnfl","global":false}},"settings":{"bocglpkldciamkbmlphanhkfnhpmnbma":{"commands":{"copy-url":{"suggested_key":"Alt+Shift+L","was_assigned":true}}},"bgpiichlckmfanooecilcjemknkcpngb":{"commands":{"copy-url":{"suggested_key":"Alt+Shift+L"}}}}}}
 JSON
 
-python3 "$patch_script" "$preferences" "$backup"
+python3 "$patch_script" "$preferences" "$backup" \
+  bgpiichlckmfanooecilcjemknkcpngb bocglpkldciamkbmlphanhkfnhpmnbma fcnboblgejompfiamdmbnckehgmblnom
 
 jq -e '
   .extensions.commands["linux:Alt+Shift+L"].extension == "bgpiichlckmfanooecilcjemknkcpngb" and
   .extensions.commands["linux:Alt+Shift+D"].extension == "dedjgknigfeelejglamclffonmophnfl" and
-  (.extensions.settings.bocglpkldciamkbmlphanhkfnhpmnbma.commands["copy-url"] | has("was_assigned") | not) and
+  (.extensions.settings | has("bocglpkldciamkbmlphanhkfnhpmnbma") | not) and
   .extensions.settings.bgpiichlckmfanooecilcjemknkcpngb.commands["copy-url"].was_assigned == true
 ' "$preferences" >/dev/null || fail "quattro upgrade moves the Copy URL shortcut to the stable extension id"
 cmp -s "$backup" <(printf '%s\n' '{"extensions":{"commands":{"linux:Alt+Shift+L":{"command_name":"copy-url","extension":"bocglpkldciamkbmlphanhkfnhpmnbma","global":false},"linux:Alt+Shift+D":{"command_name":"download-video","extension":"dedjgknigfeelejglamclffonmophnfl","global":false}},"settings":{"bocglpkldciamkbmlphanhkfnhpmnbma":{"commands":{"copy-url":{"suggested_key":"Alt+Shift+L","was_assigned":true}}},"bgpiichlckmfanooecilcjemknkcpngb":{"commands":{"copy-url":{"suggested_key":"Alt+Shift+L"}}}}}}') ||
@@ -133,7 +134,8 @@ pass "quattro upgrade repairs and backs up the Copy URL shortcut"
 
 unchanged_hash=$(sha256sum "$preferences" | cut -d' ' -f1)
 rm "$backup"
-python3 "$patch_script" "$preferences" "$backup"
+python3 "$patch_script" "$preferences" "$backup" \
+  bgpiichlckmfanooecilcjemknkcpngb bocglpkldciamkbmlphanhkfnhpmnbma fcnboblgejompfiamdmbnckehgmblnom
 [[ $(sha256sum "$preferences" | cut -d' ' -f1) == "$unchanged_hash" && ! -e $backup ]] ||
   fail "Copy URL shortcut repair is idempotent"
 pass "Copy URL shortcut repair is idempotent"
