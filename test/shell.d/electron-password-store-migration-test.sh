@@ -19,7 +19,7 @@ trap 'rm -rf "$test_dir"' EXIT
 run_migration() {
   local home=$1
 
-  HOME="$home" bash -euo pipefail "$migration" >/dev/null
+  env -u XDG_CONFIG_HOME HOME="$home" bash -euo pipefail "$migration" >/dev/null
 }
 
 home="$test_dir/commented-option"
@@ -89,3 +89,17 @@ run_migration "$home"
 [[ $(<"$home/.config/electron43-flags.conf") == "--password-store=basic_text" ]] ||
   fail "migration preserves a versioned password-store choice"
 pass "migration preserves a versioned password-store choice"
+
+home="$test_dir/xdg-home"
+config_home="$test_dir/xdg config"
+mkdir -p "$home" "$config_home"
+printf '%s\n' '--enable-features=WaylandLinuxDrmSyncobj' >"$config_home/electron43-flags.conf"
+
+HOME="$home" XDG_CONFIG_HOME="$config_home" bash -euo pipefail "$migration" >/dev/null
+
+grep -qxF -- '--password-store=gnome-libsecret' "$config_home/electron-flags.conf" ||
+  fail "migration seeds the fallback flags file under XDG_CONFIG_HOME"
+grep -qxF -- '--password-store=gnome-libsecret' "$config_home/electron43-flags.conf" ||
+  fail "migration pins versioned flags files under XDG_CONFIG_HOME"
+[[ ! -e $home/.config ]] || fail "migration writes nothing under ~/.config when XDG_CONFIG_HOME is set"
+pass "migration follows XDG_CONFIG_HOME"

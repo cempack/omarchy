@@ -7,8 +7,8 @@ echo "Pin Electron password store to gnome-libsecret (prevents keyring errors on
 # reports an unsupported keyring or falls back to basic_text. A profile sealed
 # with the wrong backend then cannot be opened.
 #
-# The wrapper reads ~/.config/electronN-flags.conf if present, otherwise
-# ~/.config/electron-flags.conf. Fresh installs receive the default from
+# The wrapper reads electronN-flags.conf from ${XDG_CONFIG_HOME:-~/.config} if
+# present, otherwise electron-flags.conf there. Fresh installs receive the default from
 # config/; this migration seeds existing users and pins any versioned flags
 # files that would otherwise shadow the fallback. An explicit
 # --password-store= line is left alone.
@@ -27,9 +27,10 @@ pin_electron_flags() {
   fi
 }
 
-pin_electron_flags "$HOME/.config/electron-flags.conf"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+pin_electron_flags "$config_dir/electron-flags.conf"
 
 shopt -s nullglob
-for flags_file in "$HOME"/.config/electron[0-9]*-flags.conf; do
+for flags_file in "$config_dir"/electron[0-9]*-flags.conf; do
   pin_electron_flags "$flags_file"
 done
